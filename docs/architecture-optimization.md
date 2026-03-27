@@ -336,7 +336,7 @@ app.post('/api/chat/stream', async (req, res) => {
 │                         MCP Server Cluster                             │
 │   ┌─────────────────────────────────────────────────────────────────┐ │
 │   │  HTTP 模式，常驻内存，支持水平扩展                              │ │
-│   │  counseling-query │ xinshi-assessment │ other-tools...         │ │
+│   │  counseling-query │ example-skill | other-tools...         │ │
 │   └─────────────────────────────────────────────────────────────────┘ │
 └────────────────────────────────────────────────────────────────────────┘
 

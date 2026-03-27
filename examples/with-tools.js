@@ -46,7 +46,8 @@ app.tool('getHistory', async ({ userId, limit = 10 }) => {
 
 // ========== 注册 Skill ==========
 
-app.skill('xinshi-assessment', { path: '/assessment' });
+// 示例 Skill
+app.skill('example-skill', { path: '/example' });
 
 // ========== 自定义路由 ==========
 
