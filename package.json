@@ -6,8 +6,8 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node examples/basic.js",
-    "test": "node tests/test.js",
-    "demo": "node examples/simple-frontend.js"
+    "demo": "node examples/demo.js",
+    "test": "node tests/test.js"
   },
   "keywords": [
     "openclaw",
