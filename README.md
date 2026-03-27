@@ -2,402 +2,538 @@
 
 把 OpenClaw 封装成标准 HTTP 后端服务的框架。
 
-## 特点
+---
 
-- ⚡ **3 分钟上手** - 只需几行代码就能启动服务
-- 🔌 **自动检测** - 自动发现 OpenClaw Gateway 端口
-- 🛠️ **工具注册** - 让 OpenClaw 调用你的后端接口
-- 📦 **Skill 路由** - 自动为 Skill 生成 HTTP 端点
-- 🔧 **灵活配置** - 支持环境变量、配置文件等多种方式
+## 架构总览
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                              用户层                                      │
+│                    (前端 Web/App/小程序)                                 │
+└─────────────────────────────┬───────────────────────────────────────────┘
+                              │ HTTP/WebSocket
+                              ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           你的后端服务                                   │
+│                        (本框架提供)                                      │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │  app.chat()     → 通用聊天接口                                    │   │
+│  │  app.tool()     → 注册工具供 AI 调用                              │   │
+│  │  app.skill()    → 注册 Skill 路由                                 │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────┬───────────────────────────────────────────┘
+                              │ WebSocket
+                              ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        OpenClaw Gateway                                 │
+│                     (AI 中间件/大脑)                                    │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │  1. 理解用户自然语言意图                                          │   │
+│  │  2. 匹配 Skill 和 Tool                                           │   │
+│  │  3. 调用后端工具获取数据                                          │   │
+│  │  4. AI 整理后返回给用户                                           │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────┬───────────────────────────────────────────┘
+                              │ stdio
+                              ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           MCP Server                                    │
+│                      (你定义的工具服务)                                  │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │  counseling_query → 查询心理咨询师                                │   │
+│  │  custom_tool      → 你的自定义工具                                │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
-## 快速开始
+## 核心概念
 
-### 1. 安装依赖
+### 概念 1: Gateway（网关）
 
+**是什么：** OpenClaw 的核心，是一个 AI 中间件。
+
+**做什么：**
+- 接收用户自然语言
+- 理解意图
+- 调用工具
+- 返回整理后的回复
+
+**如何启动：**
 ```bash
-npm install
+openclaw gateway --port 19000
 ```
 
-### 2. 确保 OpenClaw Gateway 运行
+---
+
+### 概念 2: Tool（工具）
+
+**是什么：** 后端函数，AI 可以调用的能力。
+
+**数据流：**
+```
+用户: "查询心理咨询师列表"
+    ↓
+Gateway 识别意图
+    ↓
+Gateway 调用 Tool: counseling_query({action: "list_counselors"})
+    ↓
+Tool 返回: {counselors: [李心怡, 张明远]}
+    ↓
+Gateway 整理成友好文字返回用户
+```
+
+**如何定义 Tool（两种方式）：**
+
+**方式 1: 在后端注册（HTTP API）**
+```javascript
+// 你的后端服务
+app.tool('counseling_query', async (params) => {
+  // params = {action: "list_counselors"}
+  const result = await database.query(params);
+  return result;  // 返回 JSON
+});
+
+// 工具暴露在: POST /_tool/counseling_query
+```
+
+**方式 2: MCP Server（推荐）**
+```javascript
+// mcp-server/my-tool.js
+server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  const { name, arguments: args } = request.params;
+
+  if (name === 'counseling_query') {
+    const result = await queryDatabase(args);
+    return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+  }
+});
+```
+
+注册到 OpenClaw 配置：
+```json
+// ~/.openclaw/openclaw.json
+{
+  "mcp": {
+    "servers": {
+      "my-tools": {
+        "command": "node",
+        "args": ["/path/to/mcp-server/my-tool.js"]
+      }
+    }
+  }
+}
+```
+
+---
+
+### 概念 3: Skill（技能）
+
+**是什么：** 定义 AI 如何响应特定话题的配置文件。
+
+**文件位置：** `~/.openclaw/skills/{skill-name}/SKILL.md`
+
+**结构：**
+```yaml
+---
+name: counseling-query
+description: 心理咨询资源查询 - 关键词："心理咨询师"、"预约咨询"
+metadata:
+  openclaw:
+    emoji: "🧘"
+    always: false
+---
+
+# SKILL 内容
+
+## 触发条件
+- "心理咨询师列表" → 查询咨询师
+- "心理咨询多少钱" → 查询价格
+
+## 如何响应
+使用 counseling_query 工具获取数据，用温暖语气回复用户。
+```
+
+**作用：**
+1. 告诉 AI 什么时候触发这个技能
+2. 定义 AI 的角色和回复风格
+3. 指定使用哪些工具
+
+---
+
+## 接入步骤
+
+### 步骤 1: 安装 OpenClaw CLI
+
+```bash
+npm install -g openclaw
+```
+
+### 步骤 2: 初始化设备
+
+```bash
+openclaw config
+```
+
+这会生成设备身份文件：`~/.openclaw/identity/device.json`
+
+### 步骤 3: 启动 Gateway
 
 ```bash
 openclaw gateway --port 19000 &
 ```
 
-### 3. 启动服务
+### 步骤 4: 创建你的后端服务
 
-```bash
-npm start
+```javascript
+// server.js
+import { OpenClawBackend } from 'openclaw-backend-framework';
+
+const app = new OpenClawBackend({ port: 3000 });
+
+// 1. 注册聊天接口（用户消息入口）
+app.chat('/api/chat');
+
+// 2. 注册工具（AI 可调用）
+app.tool('my_query', async (params) => {
+  // 你的业务逻辑
+  return { data: "查询结果" };
+});
+
+// 3. 启动服务
+app.start();
 ```
 
-### 4. 测试
+### 步骤 5: 创建 Skill 定义
 
 ```bash
-curl -X POST http://localhost:3000/chat \
+mkdir -p ~/.openclaw/skills/my-skill
+```
+
+```yaml
+# ~/.openclaw/skills/my-skill/SKILL.md
+---
+name: my-skill
+description: 我的技能描述
+---
+
+## 触发条件
+用户提及 "关键词" 时触发。
+
+## 如何响应
+调用 my_query 工具，用友好语气回复。
+```
+
+### 步骤 6: 配置 OpenClaw 加载 Skill
+
+```json
+// ~/.openclaw/openclaw.json
+{
+  "skills": {
+    "load": {
+      "extraDirs": ["~/.openclaw/skills"]
+    }
+  }
+}
+```
+
+### 步骤 7: 测试
+
+```bash
+curl -X POST http://localhost:3000/api/chat \
   -H "Content-Type: application/json" \
-  -d '{"message": "你好"}'
+  -d '{"message": "你好", "sessionId": "test"}'
 ```
 
 ---
 
-## 使用方法
+## 完整示例：心理咨询查询系统
 
-### 基础用法
+### 文件结构
 
-```javascript
-import { OpenClawBackend } from 'openclaw-backend-framework';
+```
+your-project/
+├── server.js                    # 后端服务
+├── mcp-server/
+│   └── counseling-mcp.js        # MCP 工具服务
+└── package.json
 
-const app = new OpenClawBackend({ port: 3000 });
-
-// 注册通用聊天接口
-app.chat();
-
-app.start();
+~/.openclaw/
+├── openclaw.json               # OpenClaw 配置
+├── identity/
+│   └── device.json             # 设备身份
+└── skills/
+    └── counseling-query/
+        └── SKILL.md            # Skill 定义
 ```
 
-### 注册 Skill
+### 1. MCP Server 定义
 
 ```javascript
-import { OpenClawBackend } from 'openclaw-backend-framework';
+// mcp-server/counseling-mcp.js
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 
-const app = new OpenClawBackend({ port: 3000 });
+const server = new Server({ name: 'counseling-server', version: '1.0.0' }, { capabilities: { tools: {} } });
 
-// 注册心石清理师 Skill
-app.skill('xinshi-assessment', {
-  path: '/assessment',
-  sessionId: (req) => req.body.userId || 'default'
+// 定义工具列表
+server.setRequestHandler(ListToolsRequestSchema, async () => ({
+  tools: [{
+    name: 'counseling_query',
+    description: '心理咨询资源查询工具',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['list_counselors', 'get_pricing'] }
+      },
+      required: ['action']
+    }
+  }]
+}));
+
+// 处理工具调用
+server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  const { name, arguments: args } = request.params;
+
+  if (name === 'counseling_query') {
+    // 你的业务逻辑
+    const data = {
+      list_counselors: [
+        { name: '李心怡', specialty: '情绪管理' },
+        { name: '张明远', specialty: '职场压力' }
+      ],
+      get_pricing: [
+        { type: '个人咨询', price: '300元/小时' }
+      ]
+    };
+
+    return {
+      content: [{ type: 'text', text: JSON.stringify(data[args.action] || {}) }]
+    };
+  }
 });
 
-app.start();
-
-// 自动暴露：
-// POST /assessment/start
-// POST /assessment/submit
+// 启动
+const transport = new StdioServerTransport();
+server.connect(transport);
 ```
 
-### 注册工具（OpenClaw 可调用）
+### 2. Skill 定义
 
-```javascript
-import { OpenClawBackend } from 'openclaw-backend-framework';
-import sqlite from 'sqlite3';
+```yaml
+# ~/.openclaw/skills/counseling-query/SKILL.md
+---
+name: counseling-query
+description: 心理咨询资源查询。关键词："心理咨询师"、"预约咨询"、"价格"
+metadata:
+  openclaw:
+    emoji: "🧘"
+    always: false
+---
 
-const db = sqlite.database('app.db');
-const app = new OpenClawBackend({ port: 3000 });
+# 心理咨询资源查询
 
-// 注册工具
-app.tool('getUser', async ({ userId }) => {
-  return new Promise((resolve, reject) => {
-    db.get('SELECT * FROM users WHERE id = ?', [userId], (err, row) => {
-      if (err) reject(err);
-      else resolve(row);
-    });
-  });
-});
+## 触发条件
+- "心理咨询师列表"、"有哪些咨询师" → 调用 counseling_query(action: list_counselors)
+- "价格"、"多少钱" → 调用 counseling_query(action: get_pricing)
 
-app.tool('saveAssessment', async ({ userId, result }) => {
-  await db.insert('assessments', { userId, result });
-  return { success: true };
-});
-
-app.start();
-
-// 工具暴露在：POST /_tool/{name}
+## 回复风格
+用温暖、专业的语气回复，使用 emoji 增加亲和力。
 ```
 
-### 自定义路由
+### 3. OpenClaw 配置
 
-```javascript
-import { OpenClawBackend } from 'openclaw-backend-framework';
-
-const app = new OpenClawBackend({ port: 3000 });
-
-app.post('/custom', async (req, res, client) => {
-  const { sessionId, message } = req.body;
-  const result = await client.invoke(sessionId, message);
-  res.json(result);
-});
-
-app.start();
+```json
+// ~/.openclaw/openclaw.json
+{
+  "gateway": {
+    "port": 19000,
+    "auth": { "mode": "token", "token": "your-token" }
+  },
+  "mcp": {
+    "servers": {
+      "counseling": {
+        "command": "node",
+        "args": ["/path/to/mcp-server/counseling-mcp.js"]
+      }
+    }
+  },
+  "skills": {
+    "load": {
+      "extraDirs": ["~/.openclaw/skills"]
+    }
+  }
+}
 ```
 
-### 使用中间件
+### 4. 启动服务
 
-```javascript
-import { OpenClawBackend } from 'openclaw-backend-framework';
+```bash
+# 启动 Gateway
+openclaw gateway &
 
-const app = new OpenClawBackend({ port: 3000 });
+# 测试
+curl -X POST http://localhost:19000/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "查询心理咨询师列表"}'
+```
 
-// 日志中间件
-app.use((req, res, next) => {
-  console.log(`${new Date().toISOString()} ${req.method} ${req.path}`);
-  next();
-});
+---
 
-// 限流中间件
-app.use((req, res, next) => {
-  const count = rateLimit.get(req.ip) || 0;
-  if (count > 100) return res.status(429).json({ error: 'Too many requests' });
-  next();
-});
+## 数据流图解
 
-app.chat();
-app.start();
+```
+用户输入: "查询心理咨询师列表"
+    │
+    ▼
+┌─────────────────┐
+│  OpenClaw GW    │  1. 识别意图：需要查询咨询师
+│  (AI 大脑)      │  2. 匹配 Skill: counseling-query
+└────────┬────────┘  3. 决定调用: counseling_query
+         │
+         ▼
+┌─────────────────┐
+│  MCP Server     │  4. 执行工具，返回数据:
+│  (工具服务)     │     {counselors: [李心怡, 张明远]}
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│  OpenClaw GW    │  5. AI 整理成友好文字:
+│  (AI 大脑)      │     "目前有2位咨询师可预约..."
+└────────┬────────┘
+         │
+         ▼
+用户收到: "目前有2位咨询师可预约：李心怡（情绪管理）、张明远（职场压力）..."
 ```
 
 ---
 
 ## API 参考
 
-### `new OpenClawBackend(config)`
-
-创建框架实例。
-
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `config.port` | number | `3000` | HTTP 服务器端口 |
-| `config.gatewayUrl` | string | - | OpenClaw Gateway 完整地址 |
-| `config.gatewayPort` | number | - | OpenClaw Gateway 端口 |
-| `config.gatewayHost` | string | `127.0.0.1` | Gateway 主机 |
-| `config.session.mode` | string | `memory` | 会话存储：`memory` / `redis` |
-| `config.session.timeout` | number | `3600000` | 会话过期时间（毫秒） |
-| `config.logLevel` | string | `info` | 日志级别：`debug` / `info` / `warn` / `error` |
-
-### `app.chat(path, sessionIdFn)`
-
-注册通用聊天接口。
+### OpenClawBackend 类
 
 ```javascript
-app.chat('/chat', (req) => req.body.sessionId || req.ip);
+import { OpenClawBackend } from 'openclaw-backend-framework';
+
+const app = new OpenClawBackend({
+  port: 3000,                    // HTTP 端口
+  gatewayUrl: 'ws://127.0.0.1:19000',  // Gateway 地址
+  gatewayPort: 19000,            // 或只指定端口
+});
 ```
 
-### `app.skill(name, options)`
+### app.chat(path, sessionIdFn)
+
+注册聊天接口。
+
+```javascript
+app.chat('/api/chat', (req) => req.body.sessionId || 'default');
+// POST /api/chat → 转发到 Gateway
+```
+
+### app.tool(name, handler)
+
+注册工具。
+
+```javascript
+app.tool('my_query', async (params) => {
+  // params = 用户传入的参数
+  return { result: 'data' };  // 返回给 AI
+});
+// POST /_tool/my_query
+```
+
+### app.skill(name, options)
 
 注册 Skill 路由。
 
 ```javascript
-app.skill('xinshi-assessment', {
-  path: '/assessment',
+app.skill('my-skill', {
+  path: '/skill',              // 路由前缀
   sessionId: (req) => req.body.userId,
-  actions: {
-    start: { message: '开始测评' },
-    submit: { message: (req) => req.body.message }
-  }
 });
+// POST /skill/start
+// POST /skill/submit
 ```
 
-### `app.tool(name, handler)`
+### app.start() / app.stop()
 
-注册工具（OpenClaw 可调用的后端接口）。
-
-```javascript
-app.tool('getUser', async ({ userId }) => {
-  return db.get('SELECT * FROM users WHERE id = ?', [userId]);
-});
-```
-
-### `app.post(path, handler)`
-
-注册自定义 POST 路由。
-
-```javascript
-app.post('/api/custom', async (req, res, client) => {
-  const result = await client.invoke('session-1', req.body.message);
-  res.json(result);
-});
-```
-
-### `app.use(middleware)`
-
-注册中间件。
-
-```javascript
-app.use((req, res, next) => {
-  console.log(`${req.method} ${req.path}`);
-  next();
-});
-```
-
-### `app.start()`
-
-启动服务。
-
-```javascript
-await app.start();
-```
-
-### `app.stop()`
-
-停止服务。
-
-```javascript
-app.stop();
-```
+启动/停止服务。
 
 ---
 
-## 配置方式
+## 配置说明
 
-### 环境变量
-
-创建 `.env` 文件：
+### 环境变量 (.env)
 
 ```bash
-# 服务器端口
 SERVER_PORT=3000
-
-# Gateway 配置（选一种）
 OPENCLAW_GATEWAY_PORT=19000
-# OPENCLAW_GATEWAY_URL=ws://127.0.0.1:19000
-# OPENCLAW_GATEWAY_AUTO=true
-
-# 会话配置
-SESSION_MODE=memory
-SESSION_TIMEOUT=3600000
-
-# 日志级别
 LOG_LEVEL=info
 ```
 
-### 自动检测
+### OpenClaw 配置 (~/.openclaw/openclaw.json)
 
-不配置任何值时，框架会自动尝试常见端口：`18789, 19000, 8080, 9000`
-
-```javascript
-const app = new OpenClawBackend();
-app.start();
-// 自动检测 Gateway 端口
+```json
+{
+  "gateway": {
+    "port": 19000,
+    "auth": { "mode": "token", "token": "xxx" }
+  },
+  "mcp": {
+    "servers": {
+      "your-tool-name": {
+        "command": "node",
+        "args": ["/path/to/mcp-server.js"]
+      }
+    }
+  },
+  "skills": {
+    "load": {
+      "extraDirs": ["~/.openclaw/skills"]
+    }
+  }
+}
 ```
 
 ---
 
-## 示例
+## 常见问题
 
-### 示例 1: 最简聊天服务
+### Q: Gateway 报错 "device signature invalid"
 
-```javascript
-import { OpenClawBackend } from 'openclaw-backend-framework';
+A: 运行 `openclaw config` 重新生成设备身份。
 
-const app = new OpenClawBackend({ port: 3000 });
-app.chat();
-app.start();
-```
+### Q: 工具没有被调用
 
-### 示例 2: 心石清理师
+A: 检查：
+1. MCP Server 是否在配置中注册
+2. Skill 的 description 是否包含触发关键词
+3. 重启 Gateway: `openclaw gateway`
 
-```javascript
-import { OpenClawBackend } from 'openclaw-backend-framework';
+### Q: 如何调试
 
-const app = new OpenClawBackend({ port: 3000 });
-
-app.skill('xinshi-assessment', {
-  path: '/assessment',
-  sessionId: (req) => `xinshi-${req.body.userId}`
-});
-
-app.start();
-```
-
-### 示例 3: 带数据库查询
-
-```javascript
-import { OpenClawBackend } from 'openclaw-backend-framework';
-import sqlite from 'sqlite3';
-
-const db = sqlite.database('app.db');
-const app = new OpenClawBackend({ port: 3000 });
-
-app.tool('getUser', async ({ userId }) => {
-  return new Promise((resolve) => {
-    db.get('SELECT * FROM users WHERE id = ?', [userId], (_, row) => resolve(row));
-  });
-});
-
-app.tool('saveResult', async ({ userId, result }) => {
-  return new Promise((resolve) => {
-    db.run('INSERT INTO results (userId, result) VALUES (?, ?)', [userId, JSON.stringify(result)], () => {
-      resolve({ success: true });
-    });
-  });
-});
-
-app.skill('xinshi-assessment', { path: '/assessment' });
-
-app.start();
-```
-
----
-
-## 测试
-
+A:
 ```bash
-# 运行测试
-npm test
+# 查看 Gateway 日志
+tail -f /tmp/openclaw/openclaw-*.log
 
-# 运行示例
-npm run demo
+# 设置调试日志级别
+LOG_LEVEL=debug node server.js
 ```
 
 ---
 
-## 故障排查
+## 示例项目
 
-### Gateway 未运行
-
-```
-❌ Failed to start: 未找到 OpenClaw Gateway
-
-解决：
-openclaw gateway --port 19000 &
-```
-
-### 端口被占用
-
-```
-Error: listen EADDRINUSE: address already in use :::3000
-
-解决：
-SERVER_PORT=3001 npm start
-```
-
-### CORS 错误
-
-框架已默认启用 CORS，如果还有问题检查：
-- 浏览器缓存
-- 代理服务器配置
-
----
-
-## 生产环境部署
-
-### Docker
-
-```dockerfile
-FROM node:20-alpine
-WORKDIR /app
-COPY package*.json ./
-RUN npm install --production
-COPY . .
-EXPOSE 3000
-CMD ["node", "server.js"]
-```
-
-### 环境变量
-
-```bash
-# .env.production
-SERVER_PORT=3000
-OPENCLAW_GATEWAY_URL=ws://openclaw.internal:19000
-LOG_LEVEL=warn
-```
-
-### 进程管理（PM2）
-
-```bash
-pm2 start server.js --name openclaw-backend
-pm2 save
-```
+| 示例 | 文件 | 说明 |
+|------|------|------|
+| 基础聊天 | examples/basic.js | 最简实现 |
+| 实时交互 | examples/realtime-demo.js | WebSocket + 流式 + 推送 |
+| 心理咨询 Demo | examples/counseling-demo.js | 完整 Skill 示例 |
 
 ---
 

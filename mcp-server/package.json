@@ -1,0 +1,9 @@
+{
+  "name": "counseling-mcp-server",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "counseling-mcp.js",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  }
+}
