@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenClaw Backend Demo</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      max-width: 800px;
+      margin: 40px auto;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+    .card {
+      background: white;
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    h1 { color: #333; margin-bottom: 8px; }
+    h2 { color: #666; font-size: 18px; margin-bottom: 16px; }
+    .status { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 12px; }
+    .status.ok { background: #e8f5e9; color: #2e7d32; }
+    .status.error { background: #ffebee; color: #c62828; }
+    input, textarea, button {
+      width: 100%;
+      padding: 12px;
+      margin: 8px 0;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      font-size: 14px;
+    }
+    button {
+      background: #007bff;
+      color: white;
+      border: none;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    button:hover { background: #0056b3; }
+    pre {
+      background: #1e1e1e;
+      color: #d4d4d4;
+      padding: 16px;
+      border-radius: 8px;
+      overflow-x: auto;
+      font-size: 13px;
+      max-height: 400px;
+      overflow-y: auto;
+    }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    label { font-weight: 600; color: #555; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>🚀 OpenClaw Backend Framework</h1>
+    <p style="color: #666; margin-top: 8px;">把 OpenClaw 封装成标准 HTTP 后端服务</p>
+    <div style="margin-top: 16px;">
+      <span class="status ok" id="status">检查中...</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>💬 通用聊天</h2>
+    <input type="text" id="chatMessage" placeholder="输入消息..." />
+    <button onclick="sendChat()">发送</button>
+    <pre id="chatOutput">等待发送...</pre>
+  </div>
+
+  <div class="card">
+    <h2>🪨 心石清理师</h2>
+    <div class="grid">
+      <div>
+        <label>用户 ID</label>
+        <input type="text" id="userId" placeholder="user-123" value="demo-user" />
+      </div>
+      <div>
+        <label>操作</label>
+        <button onclick="startAssessment()" style="background: #28a745;">开始测评</button>
+      </div>
+    </div>
+    <label style="margin-top: 12px; display: block;">答案</label>
+    <input type="text" id="answers" placeholder="1A 2B 3A..." value="1A 2B 3A 4B 5A 6B 7A 8A 9A 10B" />
+    <button onclick="submitAssessment()" style="background: #ffc107; color: #333;">提交答案</button>
+    <pre id="assessmentOutput">等待操作...</pre>
+  </div>
+
+  <div class="card">
+    <h2>🔧 注册的工具</h2>
+    <pre id="toolsOutput">加载中...</pre>
+  </div>
+
+  <script>
+    const API_BASE = window.location.origin;
+
+    // 检查服务状态
+    async function checkStatus() {
+      try {
+        const res = await fetch(`${API_BASE}/health`);
+        const data = await res.json();
+        document.getElementById('status').className = `status ${data.status === 'ok' ? 'ok' : 'error'}`;
+        document.getElementById('status').textContent = data.status === 'ok'
+          ? `✅ 服务正常 | Gateway: ${data.gateway}`
+          : `❌ 服务异常`;
+      } catch (e) {
+        document.getElementById('status').className = 'status error';
+        document.getElementById('status').textContent = `❌ 无法连接服务`;
+      }
+    }
+
+    // 获取可用工具
+    async function loadTools() {
+      try {
+        const res = await fetch(`${API_BASE}/tools`);
+        const data = await res.json();
+        document.getElementById('toolsOutput').textContent =
+          data.tools.length > 0 ? data.tools.join(', ') : '暂无注册工具';
+      } catch (e) {
+        document.getElementById('toolsOutput').textContent = '加载失败';
+      }
+    }
+
+    // 发送聊天消息
+    async function sendChat() {
+      const message = document.getElementById('chatMessage').value;
+      if (!message) return alert('请输入消息');
+
+      document.getElementById('chatOutput').textContent = '发送中...';
+      try {
+        const res = await fetch(`${API_BASE}/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message })
+        });
+        const data = await res.json();
+        document.getElementById('chatOutput').textContent = JSON.stringify(data, null, 2);
+      } catch (e) {
+        document.getElementById('chatOutput').textContent = `错误：${e.message}`;
+      }
+    }
+
+    // 开始测评
+    async function startAssessment() {
+      const userId = document.getElementById('userId').value;
+      document.getElementById('assessmentOutput').textContent = '启动测评中...';
+      try {
+        const res = await fetch(`${API_BASE}/assessment/start`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId })
+        });
+        const data = await res.json();
+        document.getElementById('assessmentOutput').textContent = JSON.stringify(data, null, 2);
+      } catch (e) {
+        document.getElementById('assessmentOutput').textContent = `错误：${e.message}`;
+      }
+    }
+
+    // 提交答案
+    async function submitAssessment() {
+      const userId = document.getElementById('userId').value;
+      const message = document.getElementById('answers').value;
+      document.getElementById('assessmentOutput').textContent = '提交中...';
+      try {
+        const res = await fetch(`${API_BASE}/assessment/submit`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId, message })
+        });
+        const data = await res.json();
+        document.getElementById('assessmentOutput').textContent = JSON.stringify(data, null, 2);
+      } catch (e) {
+        document.getElementById('assessmentOutput').textContent = `错误：${e.message}`;
+      }
+    }
+
+    // 初始化
+    checkStatus();
+    loadTools();
+    setInterval(checkStatus, 10000); // 每 10 秒检查状态
+  </script>
+</body>
+</html>
